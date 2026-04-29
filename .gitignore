@@ -1,0 +1,31 @@
+﻿# Node modules
+node_modules/
+
+# Environment variables and secrets
+.env
+*.local
+
+# Temporary files
+*.tmp
+*.log
+temp/
+temp_*/
+
+# Build outputs
+dist/
+build/
+*.mp4
+*.png
+*.jpg
+*.wav
+*.mp3
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+*.swp

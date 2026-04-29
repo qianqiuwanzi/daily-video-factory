@@ -1,0 +1,75 @@
+{
+  "topic": "TrendRadar",
+  "outputDir": "D:/workspace/自媒体内容创作/2026-04-23/TrendRadar",
+  "assetsDir": "D:/workspace/自媒体内容创作/2026-04-23/TrendRadar/assets",
+  "voice": "zh-CN-YunjianNeural",
+  "speed": 30,
+  "bgm": "D:/workspace/music-library/tech-corporate/005_innovation-drive.mp3",
+  "bgmVolume": 0.15,
+  "scenes": [
+    {
+      "id": 1,
+      "text": "说实话，错过热点真的太亏了",
+      "asset": "real_github_card.png",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "pan-right"
+    },
+    {
+      "id": 2,
+      "text": "直到我发现了这个监控神器",
+      "asset": "real_banner.png",
+      "zoomFrom": 1.10,
+      "zoomTo": 1.35,
+      "effect": "zoom-pulse"
+    },
+    {
+      "id": 3,
+      "text": "最戳我的是，它会自动把热点整理成日报",
+      "asset": "real_trendradar_ui.jpg",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "zoom-in"
+    },
+    {
+      "id": 4,
+      "text": "以前每天刷十个平台，现在只看这一个",
+      "asset": "real_ai.jpg",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "pan-up"
+    },
+    {
+      "id": 5,
+      "text": "53k用户都在用，开源免费",
+      "asset": "real_editor.png",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "slide-in"
+    },
+    {
+      "id": 6,
+      "text": "用了一周，信息焦虑都好了",
+      "asset": "real_next.jpg",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "zoom-out"
+    },
+    {
+      "id": 7,
+      "text": "一行命令，本地跑起来",
+      "asset": "real_github_pages.png",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "pan-left"
+    },
+    {
+      "id": 8,
+      "text": "邮件还是微信推送？评论区告诉我",
+      "asset": "real_wework.png",
+      "zoomFrom": 1.15,
+      "zoomTo": 1.40,
+      "effect": "zoom-in"
+    }
+  ]
+}
