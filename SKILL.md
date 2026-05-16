@@ -1,9 +1,9 @@
 ---
 name: daily-video-factory
-description: 自媒体短视频全自动生产线 v13.6(最新:v13.5 + P2b强制validate_p2b.py自动化验收门禁)。从选题研究、网感文案撰写、TTS配音、真实素材准备、Ken Burns动画视频合成、封面设计到云盘上传的全流程自动化。
+description: 自媒体短视频全自动生产线 v13.7(最新:v13.6 + B站视频格式协商下载+P3水印自动裁剪+P3字幕多行渲染)。从选题研究、网感文案撰写、TTS配音、真实素材准备、Ken Burns动画视频合成、封面设计到云盘上传的全流程自动化。
 ---
 
-# 每日视频工厂 - 全自动短视频生产线 v13.5
+# 每日视频工厂 - 全自动短视频生产线 v13.7
 
 从选题到上传,一站式完成每日短视频内容生产。
 
@@ -303,6 +303,46 @@ D:水单检查（有水单删了重下）
   "runTimeoutSeconds": 1800
 }
 ```
+
+### 🔴 P3 新增规则（v13.7 深度复盘固化）
+
+#### 1. FFmpeg setdar 正确用法
+- ❌ 错误：`setdar=1` → 把1080×1920竖屏的DAR设为1:1（正方形），视频被压扁+上下白边
+- ✅ 正确：`setdar=9/16` → 竖屏1080×1920的正确DAR
+- **强制验证**：每次DAR修改后运行 `ffprobe -v error -select_streams v:0 -show_entries "stream=display_aspect_ratio" -of csv=p=0 video.mp4` 确认结果
+
+#### 2. 字幕多行渲染（覆盖v12.4单行规则）
+- **≤15字/行** 指的是每行≤15字，不是总字数≤15字
+- 多行文本按config.json中的`\n`分行，每行独立渲染，堆叠显示
+- 行间距 = 字号+10px（如48px字体 → 行高58px）
+- PNG高度动态计算：`n_lines × line_height + padding`
+- **实现函数**：`render_multi_line_subtitle(text_block, output_png)`
+- ❌ 禁止：`flat[:15]` 截断（会丢失后续行）
+
+#### 3. B站视频格式协商三步法
+B站1080P/720P需大会员登录，匿名用户必须用免费格式：
+```
+Step 1: yt-dlp --list-formats "https://www.bilibili.com/video/BVxxx/"
+         → 输出格式列表，找到免费格式ID（通常480P，ID如30032）
+Step 2: yt-dlp --no-playlist -f <免费格式ID> -o output.mp4 "BV_URL"
+Step 3: ffprobe验证下载结果（分辨率+时长）
+```
+- 禁止直接 `yt-dlp -f best`（会被B站拒绝）
+- 格式降级：HD失败→480P→360P→图片兜底
+
+#### 4. B站水印自动裁剪
+- B站视频右下角自带水印 → P3阶段自动裁剪：
+```bash
+ffmpeg -i input.mp4 -vf "crop=iw-8:ih-8,scale=1080:1920" -c:v libx264 -preset ultrafast -crf 26 -pix_fmt yuv420p -an output.mp4
+```
+- 裁剪范围：右8px+下8px（B站水印固定位置）
+
+#### 5. 搜索工具局限性
+- Tavily/online-search 返回的是**新闻文章URL**，不是B站视频播放页（`bilibili.com/video/BVxxx`）
+- 需要播放页URL才能用yt-dlp下载
+- 搜索关键词应包含视频平台+视频关键词（如"霍去病 AI短剧 site:bilibili.com"）
+
+---
 
 ### 🔴 P3 字幕烧录铁律(v12.4 强制 - 防止 final.mp4 无字幕)
 
