@@ -16,7 +16,7 @@ import subprocess
 import hashlib
 from pathlib import Path
 
-# 🔧 Windows 控制台编码修复
+# Windows 控制台编码修复
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
@@ -51,6 +51,22 @@ def ffprobe_dimensions(filepath):
     return None
 
 
+def get_duration(filepath):
+    """用 ffprobe 获取视频时长，返回秒数或 None"""
+    try:
+        result = subprocess.run([
+            FFPROBE, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            str(filepath)
+        ], capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
 def validate_p2b(work_dir):
     """
     验证 P2b 产出，返回 (passed: bool, errors: list, warnings: list)
@@ -62,27 +78,27 @@ def validate_p2b(work_dir):
     # ── 检查1: phase_done_P2a.txt 必须存在 ──────────────────
     p2a_done = work_dir / "phase_done_P2a.txt"
     if not p2a_done.exists():
-        errors.append("❌ 门禁#0: phase_done_P2a.txt 不存在，P2a 未完成")
+        errors.append("门禁#0: phase_done_P2a.txt 不存在，P2a 未完成")
     
     # ── 检查2: assets 目录存在且有文件 ────────────────────────
     image_dir = work_dir / "assets" / "image"
     video_dir = work_dir / "assets" / "video"
     
     if not image_dir.exists():
-        errors.append(f"❌ 门禁#1: 目录不存在: {image_dir}")
+        errors.append(f"门禁#1: 目录不存在: {image_dir}")
     elif not any(image_dir.iterdir()):
-        errors.append(f"❌ 门禁#1: 目录为空: {image_dir}")
+        errors.append(f"门禁#1: 目录为空: {image_dir}")
     
     if not video_dir.exists():
-        errors.append(f"❌ 门禁#1: 目录不存在: {video_dir}")
+        errors.append(f"门禁#1: 目录不存在: {video_dir}")
     elif not any(video_dir.iterdir()):
-        errors.append(f"❌ 门禁#1: 目录为空: {video_dir}")
+        errors.append(f"门禁#1: 目录为空: {video_dir}")
     
     # ── 检查3: 收集实际文件，验证 size>0 和尺寸 ──────────────
     image_files = list(image_dir.glob("*")) if image_dir.exists() else []
     video_files = list(video_dir.glob("*")) if video_dir.exists() else []
     
-    # 过滤掉非媒体文件（如 video_sources.json 不应在 video 目录）
+    # 过滤掉非媒体文件
     image_files = [f for f in image_files if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp', '.bmp')]
     video_files = [f for f in video_files if f.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv', '.webm')]
     
@@ -91,22 +107,22 @@ def validate_p2b(work_dir):
     # 验证每个文件 size > 0
     for f in image_files + video_files:
         if f.stat().st_size == 0:
-            errors.append(f"❌ 门禁#1: 文件为空: {f.name}")
+            errors.append(f"门禁#1: 文件为空: {f.name}")
     
     # 验证视频文件尺寸（width > height，横屏）
     for vf in video_files:
         dims = ffprobe_dimensions(vf)
         if dims is None:
-            warnings.append(f"⚠️  门禁#2: 无法获取视频尺寸: {vf.name}")
+            warnings.append(f"门禁#2: 无法获取视频尺寸: {vf.name}")
         else:
             w, h = dims
-            if h > w:  # 竖屏，不合格
+            if h > w:
                 errors.append(
-                    f"❌ 门禁#2: 视频是竖屏({w}×{h}): {vf.name} — 必须横屏(w>h)，立即删除"
+                    f"门禁#2: 视频是竖屏({w}×{h}): {vf.name} — 必须横屏(w>h)"
                 )
             elif w < 1280 or h < 720:
                 warnings.append(
-                    f"⚠️  门禁#2: 视频尺寸偏低({w}×{h}): {vf.name}，建议≥1280×720"
+                    f"门禁#2: 视频尺寸偏低({w}×{h}): {vf.name}，建议≥1280×720"
                 )
             else:
                 print(f"  ✅ 视频尺寸合格: {vf.name} ({w}×{h})")
@@ -119,23 +135,23 @@ def validate_p2b(work_dir):
                 w, h = im.size
                 if h > w:
                     errors.append(
-                        f"❌ 门禁#2: 图片是竖屏({w}×{h}): {imgf.name} — 必须横屏(w>h)"
+                        f"门禁#2: 图片是竖屏({w}×{h}): {imgf.name} — 必须横屏(w>h)"
                     )
                 elif w < 800 or h < 600:
                     errors.append(
-                        f"❌ 门禁#2: 图片尺寸太小({w}×{h}): {imgf.name} — 必须≥800×600"
+                        f"门禁#2: 图片尺寸太小({w}×{h}): {imgf.name} — 必须≥800×600"
                     )
                 else:
                     print(f"  ✅ 图片尺寸合格: {imgf.name} ({w}×{h})")
         except ImportError:
-            warnings.append(f"⚠️  PIL 未安装，跳过图片尺寸验证: {imgf.name}")
+            warnings.append(f"PIL 未安装，跳过图片尺寸验证: {imgf.name}")
         except Exception as e:
-            warnings.append(f"⚠️  图片尺寸验证失败: {imgf.name}: {e}")
+            warnings.append(f"图片尺寸验证失败: {imgf.name}: {e}")
     
-    # ── 检查4: video_sources.json 存在且结构正确 ──────────────
+    # ── 检查4: video_sources.json 存在、URL有效、无欺诈 ──────────────
     vs_json = work_dir / "assets" / "video_sources.json"
     if not vs_json.exists():
-        warnings.append("⚠️  门禁#3: video_sources.json 不存在，无法验证URL记录")
+        errors.append("门禁#3: video_sources.json 不存在，无法验证URL记录")
     else:
         with open(vs_json, 'r', encoding='utf-8') as f:
             vs_data = json.load(f)
@@ -144,13 +160,36 @@ def validate_p2b(work_dir):
         
         missing_local = [s for s in scenes if not s.get("localPath")]
         if missing_local:
-            errors.append(f"❌ 门禁#3: {len(missing_local)} 个场景 localPath 为空")
+            errors.append(f"门禁#3: {len(missing_local)} 个场景 localPath 为空")
         
-        # 验证 localPath 文件确实存在
+        # ── 欺诈检测：verified=true 但 sourceUrl=placeholder ──
+        fraud_count = 0
         for s in scenes:
-            lp = s.get("localPath")
-            if lp and not Path(lp).exists():
-                warnings.append(f"⚠️  门禁#3: localPath 文件不存在: {lp}")
+            source = s.get("sourceUrl", "").strip().lower()
+            note = s.get("note", "").strip().lower()
+            verified = s.get("verified", False)
+            if verified and (source == "placeholder" or source == "pil" or
+                           "placeholder" in note or "pil card" in note):
+                fraud_count += 1
+                scene_id = s.get("id", "?")
+                lp = s.get("localPath", "")
+                errors.append(
+                    f"门禁#3: scene_{scene_id} 标记 verified=true 但 sourceUrl={source} "
+                    f"(文件:{lp}) — 数据欺诈，必须重新下载真实素材"
+                )
+        
+        # 验证 localPath 文件存在（相对路径或绝对路径）
+        for s in scenes:
+            lp = s.get("localPath", "")
+            if not lp:
+                continue
+            # 尝试相对路径
+            abs_path = work_dir / lp
+            if not abs_path.exists():
+                # 尝试绝对路径
+                abs_path2 = Path(lp)
+                if not abs_path2.exists():
+                    warnings.append(f"门禁#3: localPath 文件不存在: {lp}")
     
     # ── 检查5: 视频素材占比 > 50% ────────────────────────────
     config_path = work_dir / "config.json"
@@ -158,9 +197,7 @@ def validate_p2b(work_dir):
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         
-        # 只检查视频平台（合并后的）
         platforms = config.get("platforms", {})
-        # 兼容旧字段名 platforms / platform
         if not platforms:
             platforms = config.get("platform", {})
         
@@ -173,14 +210,14 @@ def validate_p2b(work_dir):
         
         if total_scenes > 0:
             video_ratio = video_scenes / total_scenes
-            print(f"📊 视频场景占比: {video_scenes}/{total_scenes} = {video_ratio*100:.0f}%")
+            print(f"📊 视频场景占比(config): {video_scenes}/{total_scenes} = {video_ratio*100:.0f}%")
             if video_ratio < 0.5:
                 errors.append(
-                    f"❌ 门禁#4: 视频场景占比({video_ratio*100:.0f}%) < 50% "
+                    f"门禁#4: 视频场景占比({video_ratio*100:.0f}%) < 50% "
                     f"({video_scenes}/{total_scenes})"
                 )
         else:
-            warnings.append("⚠️  门禁#4: config.json 中无场景，跳过视频占比检查")
+            warnings.append("门禁#4: config.json 中无场景，跳过视频占比检查")
     
     # ── 检查6: 文件 MD5 去重（防止同一文件凑数）────────────
     all_files = image_files + video_files
@@ -190,32 +227,119 @@ def validate_p2b(work_dir):
             md5 = get_md5(f)
             if md5 in md5_map:
                 errors.append(
-                    f"❌ 门禁#5: 文件MD5重复: {f.name} 与 {md5_map[md5].name} 内容完全相同"
+                    f"门禁#5: 文件MD5重复: {f.name} 与 {md5_map[md5].name} 内容完全相同"
                 )
             else:
                 md5_map[md5] = f
         print(f"📊 MD5去重检查: {len(all_files)} 个文件, {len(md5_map)} 个唯一MD5")
     
-    # ── 检查7: 真实素材 vs 生成素材（粗略检查）──────────────
-    # 生成素材通常是 PIL 生成的纯色/文字卡片，文件较小
-    generated_count = 0
-    real_count = 0
-    for f in image_files + video_files:
-        size_mb = f.stat().st_size / (1024 * 1024)
-        if size_mb < 0.05:  # < 50KB 可能是生成图
-            generated_count += 1
-        else:
-            real_count += 1
+    # ── 检查7: 真实素材 vs 生成素材（基于 sourceUrl 字段）──────────────
+    # 【v13.9 修复】不再用文件大小判断真实/生成，而是读取 video_sources.json 的 sourceUrl 字段
+    real_by_source = []      # 真实素材列表
+    generated_by_source = [] # 生成素材列表
+    suspicious_list = []    # 可疑素材（时长过短或文件过小）
     
-    total = generated_count + real_count
-    if total > 0:
-        real_ratio = real_count / total
-        print(f"📊 真实素材占比(粗略): {real_count}/{total} = {real_ratio*100:.0f}%")
-        if real_ratio < 0.6:
-            warnings.append(
-                f"⚠️  门禁#6: 真实素材占比({real_ratio*100:.0f}%) < 60%，"
-                f"生成素材({generated_count}个)可能过多"
+    if vs_json.exists():
+        with open(vs_json, 'r', encoding='utf-8') as f:
+            vs_data = json.load(f)
+        scenes = vs_data.get("scenes", [])
+        
+        for s in scenes:
+            source = s.get("sourceUrl", "").strip().lower()
+            note = s.get("note", "").strip().lower()
+            lp = s.get("localPath", "")
+            scene_id = s.get("id", "?")
+            scene_name = f"scene_{scene_id:02d}"
+            
+            # 判断是否为生成素材
+            is_generated = (
+                not source or
+                source == "placeholder" or
+                source == "pil" or
+                "placeholder" in note or
+                "pil card" in note
             )
+            
+            # 真实素材：必须有具体URL（非placeholder/PIL）且长度>10
+            is_real = not is_generated and len(source) > 10
+            
+            if is_generated:
+                generated_by_source.append(f"{scene_name}(src={source})")
+            elif lp:
+                # 真实素材：进一步检查文件大小和时长
+                vf = work_dir / lp if not Path(lp).is_absolute() else Path(lp)
+                if vf.exists():
+                    size_mb = vf.stat().st_size / (1024 * 1024)
+                    duration = get_duration(vf)
+                    
+                    # 真实视频通常>1MB且>10秒
+                    if size_mb < 1.0 or (duration and duration < 10):
+                        suspicious_list.append(
+                            f"{scene_name}({size_mb:.1f}MB, {duration:.0f}s, {source[:40]})"
+                        )
+                    else:
+                        real_by_source.append(f"{scene_name}({source[:40]})")
+                else:
+                    real_by_source.append(f"{scene_name}(file_missing)")
+            else:
+                real_by_source.append(f"{scene_name}(no_localPath)")
+        
+        total = len(real_by_source) + len(generated_by_source) + len(suspicious_list)
+        if total > 0:
+            effective_real = len(real_by_source) + len(suspicious_list)  # 可疑计入分母
+            real_ratio = effective_real / total
+            
+            print(f"📊 真实素材占比(按sourceUrl): {effective_real}/{total} = {real_ratio*100:.0f}%")
+            print(f"  真实: {real_by_source}")
+            print(f"  生成: {generated_by_source}")
+            if suspicious_list:
+                print(f"  可疑: {suspicious_list}")
+            
+            if real_ratio < 0.6:
+                errors.append(
+                    f"门禁#6: 真实素材占比({real_ratio*100:.0f}%) < 60%，"
+                    f"真实={len(real_by_source)}, 生成={len(generated_by_source)}, "
+                    f"可疑={len(suspicious_list)}"
+                )
+            elif suspicious_list:
+                warnings.append(
+                    f"门禁#6: {len(suspicious_list)} 个素材疑似生成"
+                    f"(文件<1MB或时长<10s): {suspicious_list}"
+                )
+            
+            # 额外强制规则：生成素材绝对不能超过40%（≤40%，而非<60%）
+            pil_ratio = len(generated_by_source) / total if total > 0 else 0
+            if pil_ratio > 0.4:
+                errors.append(
+                    f"门禁#6: PIL/生成素材占比({pil_ratio*100:.0f}%) > 40%，"
+                    f"最多允许 40%，当前有 {len(generated_by_source)} 个生成素材"
+                )
+    else:
+        # 兜底：video_sources.json 不存在时用旧 heuristic（提高阈值）
+        warnings.append("video_sources.json 不存在，使用兜底 heuristic")
+        generated_count = 0
+        real_count = 0
+        suspicious_count = 0
+        for f in image_files + video_files:
+            size_mb = f.stat().st_size / (1024 * 1024)
+            if f.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv', '.webm'):
+                duration = get_duration(f)
+                if size_mb < 1.0 or (duration and duration < 10):
+                    suspicious_count += 1
+                    continue
+            if size_mb < 1.0:
+                generated_count += 1
+            else:
+                real_count += 1
+        
+        total = generated_count + real_count + suspicious_count
+        if total > 0:
+            real_ratio = real_count / total
+            print(f"📊 真实素材占比(兜底): {real_count}/{total} = {real_ratio*100:.0f}%")
+            if real_ratio < 0.6:
+                errors.append(
+                    f"门禁#6: 真实素材占比({real_ratio*100:.0f}%) < 60%"
+                )
     
     return errors, warnings
 
@@ -223,9 +347,7 @@ def validate_p2b(work_dir):
 def main():
     work_dir = sys.argv[1] if len(sys.argv) > 1 else ""
     
-    # 自动推断工作目录
     if not work_dir:
-        # 尝试从 .task-state.json 推断
         tstate = Path("D:/workspace/MediaContentCreation/2026-05-15/.task-state.json")
         if tstate.exists():
             with open(tstate, 'r', encoding='utf-8') as f:
@@ -233,7 +355,7 @@ def main():
             work_dir = data.get("outputDir", "")
     
     if not work_dir or not Path(work_dir).exists():
-        print(f"❌ 无法推断工作目录，请手动指定: python validate_p2b.py <工作目录>")
+        print(f"无法推断工作目录，请手动指定: python validate_p2b.py <工作目录>")
         sys.exit(1)
     
     print(f"=== P2b 验收脚本 开始执行 ===")
@@ -243,15 +365,15 @@ def main():
     
     print(f"\n=== 验收结果 ===")
     if warnings:
-        print(f"⚠️  警告 ({len(warnings)} 项):")
+        print(f"警告 ({len(warnings)} 项):")
         for w in warnings:
             print(f"  {w}")
     
     if errors:
-        print(f"❌ 门禁不通过 ({len(errors)} 项错误) — 不要写 phase_done_P2.txt")
+        print(f"\n门禁不通过 ({len(errors)} 项错误) — 不要写 phase_done_P2.txt")
         for e in errors:
             print(f"  {e}")
-        print(f"\n🔴 P2b 验收失败 — 请修复上述错误后重新运行")
+        print(f"\nP2b 验收失败 — 请修复上述错误后重新运行")
         sys.exit(1)
     else:
         print(f"✅ P2b 验收全部通过！")
