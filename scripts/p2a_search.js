@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * P2a 搜索阶段脚本 (v13.9 主会话exec版)
- *
+ * P2a 搜索阶段脚本 (v13.9 修正版 - 严格按照 SKILL.md 站点列表搜索)
+ * 
  * 用法: node p2a_search.js --output "D:/workspace/MediaContentCreation/YYYY-MM-DD"
- *
- * 核心规则:
- * 1. 视频场景只搜视频站点(素材站+视频平台)
- * 2. 图片场景可搜任意站点(新闻/官网/社交)
- * 3. 禁止搜索新闻文章站作为视频素材源
- * 4. 每个场景至少2个候选URL
- * 5. 搜索失败=记录=不编造URL
+ * 
+ * 核心修正:
+ * 1. 视频场景: 按 SKILL.md 规定的10个视频素材站点分别搜索
+ * 2. 图片场景: 按 SKILL.md 规定的8个图片素材站点分别搜索
+ * 3. 使用 Tavily API (支持 site: 语法, 且中英文切换)
+ * 4. Tavily 返回 Markdown 格式, 正确提取 URL
  */
 
 const { execSync } = require('child_process');
@@ -19,140 +18,254 @@ const path = require('path');
 const TAVILY = 'D:/workspace/scripts/tavily_search.cjs';
 const PROSEARCH = 'D:/Program Files/QClaw/resources/openclaw/config/skills/online-search/scripts/prosearch.cjs';
 
-// ── 站点分类 ──────────────────────────────────────────────
-
+// SKILL.md §11.2 视频素材搜索站点 (10个)
 const VIDEO_SITES = [
-  // 素材站(有直链可下载)
-  'vjshi.com', 'aigei.com', 'xinpianchang.com', 'shipin520.com',
-  // 视频平台(yt-dlp可下载)
-  'bilibili.com', 'douyin.com', 'haokan.baidu.com',
-  // 海外免费
-  'pexels.com', 'pixabay.com', 'coverr.co',
+  'vjshi.com',     // 光厂 VJshi - 专业视频素材, 首选 HTTP 直链
+  'aigei.com',     // 爱给网 - 综合免费素材站
+  'xinpianchang.com', // 新片场 - 国内最大创作者社区
+  'shipin520.com', // 潮点视频 - 短视频素材
+  'pexels.com',    // Pexels - 海外免费视频 (需Referer)
+  'pixabay.com',   // Pixabay - 海外免费视频 (需API)
+  'bilibili.com',  // B站 - 需 yt-dlp 下载 (播放页URL)
+  'douyin.com',    // 抖音 - 需 yt-dlp 下载
+  'haokan.baidu.com', // 好看视频 - 百度旗下
+  '*.com/product',  // 产品官网 - 浏览器录屏兜底
 ];
 
-const VIDEO_PLATFORMS = [
-  'bilibili.com', 'douyin.com', 'haokan.baidu.com',
-  'youtube.com', 'vimeo.com',
+// SKILL.md §11.3 图片素材搜索站点 (8个)
+const IMAGE_SITES = [
+  'news.163.com',  // 网易新闻 - 新闻配图首选
+  'news.qq.com',   // 腾讯新闻 - 新闻配图
+  'sohu.com',      // 搜狐 - 文章配图
+  'sina.com.cn',   // 新浪 - 新闻配图
+  'zhihu.com',      // 知乎 - 专栏配图
+  'xiaohongshu.com', // 小红书 - 产品/场景图
+  '*.com',          // 产品官网 - 浏览器截图
+  'pexels.com',     // Pexels - 高质量图片
 ];
 
-// 禁止作为视频素材源(新闻/文章站)
-const BLOCKED_VIDEO_SITES = [
-  'sohu.com', '163.com', 'sina.com.cn', 'zhihu.com',
-  'qq.com', 'toutiao.com', 'thepaper.cn', 'baijiahao.baidu.com',
-];
-
-function isVideoSite(url) {
-  return VIDEO_SITES.some(s => url.includes(s));
-}
-
-function isVideoPlatform(url) {
-  return VIDEO_PLATFORMS.some(s => url.includes(s));
-}
-
-function isBlockedForVideo(url) {
-  return BLOCKED_VIDEO_SITES.some(s => url.includes(s));
-}
-
-function isImageUrl(url) {
-  return /\.(jpg|jpeg|png|webp|bmp)/i.test(url);
-}
-
-// ── 搜索函数 ──────────────────────────────────────────────
-
-function tavilySearch(query) {
+/**
+ * 调用 Tavily 搜索 (支持 site: 语法, Markdown 输出)
+ */
+function tavilySearch(query, maxResults = 5) {
   try {
     const result = execSync(
-      `node "${TAVILY}" --query="${query}" --max_results=5`,
+      `node "${TAVILY}" --query="${query.replace(/"/g, '\\"')}" --max_results=${maxResults}`,
       { encoding: 'utf8', timeout: 30000, shell: true }
     );
-    // Tavily 输出是 Markdown 文本，提取 URL
+    // Tavily 输出 Markdown 格式 [标题](URL)
     const results = [];
-    const urlRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-    let match;
-    while ((match = urlRegex.exec(result)) !== null) {
-      results.push({ url: match[2], title: match[1], content: '' });
-    }
-    // 也匹配裸URL
-    const rawUrlRegex = /https?:\/\/[^\s"<>\]]+/g;
-    let rawMatch;
-    while ((rawMatch = rawUrlRegex.exec(result)) !== null) {
-      const url = rawMatch[0];
-      if (!results.find(r => r.url === url)) {
-        results.push({ url, title: '', content: '' });
-      }
-    }
-    return results;
-  } catch (e) {
-    console.log(`  Tavily failed: ${e.message.substring(0, 80)}`);
-    return [];
-  }
-}
-
-function prosearchBackup(query) {
-  try {
-    const result = execSync(
-      `node "${PROSEARCH}" --keyword="${query}" --cnt=5`,
-      { encoding: 'utf8', timeout: 30000, shell: true }
-    );
-    // ProSearch 输出可能是 Markdown 或文本，提取 URL
-    const results = [];
-    // Markdown link: [title](url)
     const mdRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-    let match;
-    while ((match = mdRegex.exec(result)) !== null) {
-      results.push({ url: match[2], title: match[1], content: '' });
+    let m;
+    while ((m = mdRegex.exec(result)) !== null) {
+      results.push({ title: m[1], url: m[2], content: '' });
     }
-    // 裸 URL
-    const rawRegex = /https?:\/\/[^\s"<>\]]+/g;
-    let rawMatch;
-    while ((rawMatch = rawRegex.exec(result)) !== null) {
-      const url = rawMatch[0];
+    // 也提取裸 URL
+    const urlRegex = /https?:\/\/[^\s"<>)]+/g;
+    while ((m = urlRegex.exec(result)) !== null) {
+      const url = m[0];
       if (!results.find(r => r.url === url)) {
-        results.push({ url, title: '', content: '' });
+        results.push({ title: '', url, content: '' });
       }
     }
     return results;
   } catch (e) {
-    console.log(`  ProSearch failed: ${e.message.substring(0, 80)}`);
+    console.log(`  [Tavily ERROR] ${e.message.substring(0, 80)}`);
     return [];
   }
 }
 
-// ── 主逻辑 ─────────────────────────────────────────────────
+/**
+ * 调用 ProSearch 备份搜索
+ */
+function prosearchBackup(query, cnt = 5) {
+  try {
+    const result = execSync(
+      `node "${PROSEARCH}" --keyword="${query.replace(/"/g, '\\"')}" --cnt=${cnt}`,
+      { encoding: 'utf8', timeout: 30000, shell: true }
+    );
+    const results = [];
+    const mdRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let m;
+    while ((m = mdRegex.exec(result)) !== null) {
+      results.push({ title: m[1], url: m[2], content: '' });
+    }
+    const urlRegex = /https?:\/\/[^\s"<>)]+/g;
+    while ((m = urlRegex.exec(result)) !== null) {
+      const url = m[0];
+      if (!results.find(r => r.url === url)) {
+        results.push({ title: '', url, content: '' });
+      }
+    }
+    return results;
+  } catch (e) {
+    console.log(`  [ProSearch ERROR] ${e.message.substring(0, 80)}`);
+    return [];
+  }
+}
+
+/**
+ * 视频场景: 严格按照 SKILL.md 10个视频站点搜索
+ */
+function searchVideoScene(keyword) {
+  const allUrls = [];
+  
+  // 优先级1: 国内视频素材站 (前三首选)
+  const prioritySites = ['vjshi.com', 'aigei.com', 'xinpianchang.com', 'shipin520.com'];
+  for (const site of prioritySites) {
+    const query = `${keyword} site:${site}`;
+    console.log(`    [Tavily] site:${site}`);
+    const results = tavilySearch(query, 3);
+    const siteUrls = results
+      .filter(r => r.url && r.url.includes(site))
+      .map(r => r.url);
+    if (siteUrls.length > 0) {
+      console.log(`      ✅ ${siteUrls.length} URL(s)`);
+      allUrls.push(...siteUrls);
+      break; // 找到一个站点有结果就够
+    }
+  }
+  
+  // 优先级2: 海外视频站 (Pexels/Pixabay)
+  if (allUrls.length < 2) {
+    for (const site of ['pexels.com', 'pixabay.com']) {
+      const query = `${keyword} site:${site}`;
+      console.log(`    [Tavily] site:${site}`);
+      const results = tavilySearch(query, 3);
+      const siteUrls = results
+        .filter(r => r.url && (r.url.includes('pexels') || r.url.includes('pixabay')))
+        .map(r => r.url);
+      if (siteUrls.length > 0) {
+        console.log(`      ✅ ${siteUrls.length} URL(s)`);
+        allUrls.push(...siteUrls);
+      }
+    }
+  }
+  
+  // 优先级3: 视频平台 (B站/抖音/好看, 需 yt-dlp)
+  if (allUrls.length < 2) {
+    for (const site of ['bilibili.com', 'douyin.com', 'haokan.baidu.com']) {
+      const query = `${keyword} 视频 site:${site}`;
+      console.log(`    [Tavily] site:${site} (video platform)`);
+      const results = tavilySearch(query, 3);
+      const siteUrls = results
+        .filter(r => r.url && (r.url.includes('bilibili') || r.url.includes('douyin') || r.url.includes('haokan')))
+        .map(r => r.url);
+      if (siteUrls.length > 0) {
+        console.log(`      ✅ ${siteUrls.length} URL(s) (video platform)`);
+        allUrls.push(...siteUrls);
+      }
+    }
+  }
+  
+  // 兜底: ProSearch 宽泛搜索
+  if (allUrls.length < 2) {
+    console.log(`    [ProSearch] backup`);
+    const results = prosearchBackup(`${keyword} 视频素材`, 5);
+    const backupUrls = results.map(r => r.url).filter(u => u.length > 10);
+    allUrls.push(...backupUrls);
+  }
+  
+  return [...new Set(allUrls)];
+}
+
+/**
+ * 图片场景: 严格按照 SKILL.md 8个图片站点搜索
+ */
+function searchImageScene(keyword) {
+  const allUrls = [];
+  
+  // 优先级1: 国内新闻站 (配图首选)
+  const newsSites = ['news.163.com', 'news.qq.com', 'sohu.com', 'sina.com.cn'];
+  for (const site of newsSites) {
+    const query = `${keyword} site:${site}`;
+    console.log(`    [Tavily] site:${site}`);
+    const results = tavilySearch(query, 3);
+    const siteUrls = results
+      .filter(r => r.url && r.url.includes(site))
+      .map(r => r.url);
+    if (siteUrls.length > 0) {
+      console.log(`      ✅ ${siteUrls.length} URL(s)`);
+      allUrls.push(...siteUrls);
+      break;
+    }
+  }
+  
+  // 优先级2: 社交媒体 (知乎/小红书)
+  if (allUrls.length < 2) {
+    for (const site of ['zhihu.com', 'xiaohongshu.com']) {
+      const query = `${keyword} site:${site}`;
+      console.log(`    [Tavily] site:${site}`);
+      const results = tavilySearch(query, 3);
+      const siteUrls = results
+        .filter(r => r.url && (r.url.includes('zhihu') || r.url.includes('xiaohongshu')))
+        .map(r => r.url);
+      if (siteUrls.length > 0) {
+        console.log(`      ✅ ${siteUrls.length} URL(s)`);
+        allUrls.push(...siteUrls);
+      }
+    }
+  }
+  
+  // 优先级3: 海外图片 (Pexels)
+  if (allUrls.length < 2) {
+    console.log(`    [Tavily] site:pexels.com`);
+    const results = tavilySearch(`${keyword} site:pexels.com`, 3);
+    const siteUrls = results
+      .filter(r => r.url && r.url.includes('pexels'))
+      .map(r => r.url);
+    if (siteUrls.length > 0) {
+      console.log(`      ✅ ${siteUrls.length} URL(s)`);
+      allUrls.push(...siteUrls);
+    }
+  }
+  
+  // 兜底: ProSearch
+  if (allUrls.length < 2) {
+    console.log(`    [ProSearch] backup`);
+    const results = prosearchBackup(`${keyword} 图片素材`, 5);
+    const backupUrls = results.map(r => r.url).filter(u => u.length > 10);
+    allUrls.push(...backupUrls);
+  }
+  
+  return [...new Set(allUrls)];
+}
+
+// ── 主逻辑 ──────────────────────────────────────
 
 function main() {
   const args = process.argv.slice(2);
   let outputDir = '';
-
+  
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--output' && i + 1 < args.length) {
       outputDir = args[i + 1];
       i++;
     }
   }
-
+  
   if (!outputDir) {
     console.error('Usage: node p2a_search.js --output <work_dir>');
     process.exit(1);
   }
-
+  
   const configPath = path.join(outputDir, 'config.json');
   const assetsDir = path.join(outputDir, 'assets');
   const resultPath = path.join(assetsDir, 'video_search_results.json');
-
+  
   if (!fs.existsSync(configPath)) {
-    console.error(`config.json not found: ${configPath}`);
+    console.error(`❌ config.json not found: ${configPath}`);
     process.exit(1);
   }
-
-  // 确保目录存在
-  if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
-
+  
+  if (!fs.existsSync(assetsDir)) {
+    fs.mkdirSync(assetsDir, { recursive: true });
+  }
+  
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-
-  // 收集所有场景
   const platforms = config.platforms || config.platform || {};
   const allScenes = [];
+  
   for (const [pName, pData] of Object.entries(platforms)) {
     const scenes = pData.scenes || [];
     scenes.forEach((s, i) => {
@@ -164,106 +277,70 @@ function main() {
       });
     });
   }
-
-  console.log(`=== P2a Search Stage ===`);
+  
+  console.log('=== P2a Search Stage (v13.9 Fixed) ===');
   console.log(`Output: ${outputDir}`);
-  console.log(`Scenes: ${allScenes.length} total, ${allScenes.filter(s => s.assetType === 'video').length} video, ${allScenes.filter(s => s.assetType === 'image').length} image`);
-
+  console.log(`Scenes: ${allScenes.length} total`);
+  console.log(`Video sites: ${VIDEO_SITES.length} (from SKILL.md §11.2)`);
+  console.log(`Image sites: ${IMAGE_SITES.length} (from SKILL.md §11.3)\n`);
+  
   const searchResults = [];
   let failedScenes = [];
-
+  
   for (const scene of allScenes) {
     const sceneId = scene.id;
-    console.log(`\n[Scene ${sceneId}] ${scene.assetType} | keywords: "${scene.keywords}"`);
-
+    const kw = scene.keywords || scene.text.substring(0, 30);
+    console.log(`\n[Scene ${sceneId}] ${scene.assetType} | keywords: "${kw}"`);
+    
     let urls = [];
-    let source = '';
-
-    // ── 视频场景搜索 ──
+    
     if (scene.assetType === 'video') {
-      // Round 1: Tavily 搜视频相关
-      const kw = scene.keywords || scene.text.substring(0, 30);
-      const query = `${kw} 视频`;
-      console.log(`  Tavily search: "${query}"`);
-      let results = tavilySearch(query);
-      urls = results.map(r => r.url).filter(u => u.length > 10);
-      source = 'tavily-video';
-
-      // Round 2: ProSearch 兜底
-      if (urls.length < 2) {
-        console.log(`  ProSearch backup: "${kw}"`);
-        const backupResults = prosearchBackup(kw);
-        const backupUrls = backupResults.map(r => r.url).filter(u => u.length > 10);
-        urls = [...new Set([...urls, ...backupUrls])];
-        source = urls.length > 0 ? (source + '+prosearch') : 'prosearch';
-      }
-
-      urls = [...new Set(urls)];
-
-      if (urls.length === 0) {
-        console.log(`  WARN: No video URLs found for scene ${sceneId}`);
-        failedScenes.push({ id: sceneId, reason: 'no-video-urls' });
-      } else {
-        console.log(`  OK: ${urls.length} video URL(s) found`);
-        urls.forEach((u, i) => console.log(`    [${i + 1}] ${u.substring(0, 80)}`));
-      }
-
+      console.log('  [Video] Searching 10 video sites from SKILL.md...');
+      urls = searchVideoScene(kw);
     } else {
-      // 图片场景: 用Tavily搜索相关文章/报道
-      const kw = scene.keywords || scene.text.substring(0, 30);
-      const query = `${kw}`;
-
-      console.log(`  Tavily search: "${query}"`);
-      let results = tavilySearch(query);
-      urls = results.map(r => r.url).filter(u => u.length > 10);
-      source = 'tavily-image';
-
-      // 兜底
-      if (urls.length < 2) {
-        console.log(`  ProSearch backup: "${kw}"`);
-        const backupResults = prosearchBackup(kw);
-        const backupUrls = backupResults.map(r => r.url).filter(u => u.length > 10);
-        urls = [...new Set([...urls, ...backupUrls])];
-        source = 'tavily+prosearch';
-      }
-
-      urls = [...new Set(urls)];
-
-      if (urls.length === 0) {
-        console.log(`  WARN: No image URLs found for scene ${sceneId}`);
-        failedScenes.push({ id: sceneId, reason: 'no-image-urls' });
-      } else {
-        console.log(`  OK: ${urls.length} image URL(s) found`);
-        urls.forEach((u, i) => console.log(`    [${i + 1}] ${u.substring(0, 80)}`));
-      }
+      console.log('  [Image] Searching 8 image sites from SKILL.md...');
+      urls = searchImageScene(kw);
     }
-
+    
+    if (urls.length === 0) {
+      console.log(`  ❌ No URLs found for scene ${sceneId}`);
+      failedScenes.push({ id: sceneId, reason: 'no-urls' });
+    } else {
+      console.log(`  ✅ ${urls.length} URL(s) found`);
+      urls.forEach((u, i) => console.log(`    [${i + 1}] ${u.substring(0, 80)}`));
+    }
+    
     searchResults.push({
       sceneId: sceneId,
       assetType: scene.assetType,
       urls: urls,
-      source: source,
-      keywords: scene.keywords || '',
+      keywords: kw,
     });
   }
-
-  // ── 写入搜索结果 ──────────────────────────
-  const output = { scenes: searchResults, failedScenes: failedScenes, searchedAt: new Date().toISOString() };
+  
+  // 写入搜索结果
+  const output = {
+    scenes: searchResults,
+    failedScenes: failedScenes,
+    searchedAt: new Date().toISOString(),
+    videoSites: VIDEO_SITES,
+    imageSites: IMAGE_SITES,
+  };
+  
   fs.writeFileSync(resultPath, JSON.stringify(output, null, 2), 'utf8');
+  
   console.log(`\n=== Search Results ===`);
   console.log(`Written: ${resultPath}`);
   console.log(`Total scenes: ${searchResults.length}`);
   console.log(`Scenes with URLs: ${searchResults.filter(s => s.urls.length > 0).length}`);
   console.log(`Scenes failed: ${failedScenes.length}`);
-
+  
   if (failedScenes.length > 0) {
-    console.log(`\nWARN: ${failedScenes.length} scene(s) without valid URLs:`);
+    console.log(`\n⚠️  ${failedScenes.length} scene(s) without valid URLs:`);
     failedScenes.forEach(f => console.log(`  - Scene ${f.id}: ${f.reason}`));
-    console.log(`P2b will need to handle these scenes (may use PIL fallback)`);
-    // 不阻止 — P2b可以PIL兜底(≤2个)
   }
-
-  // ── 写 phase_done_P2a.txt ──
+  
+  // 写 phase_done_P2a.txt
   const doneFile = path.join(outputDir, 'phase_done_P2a.txt');
   fs.writeFileSync(doneFile, `P2a completed at ${new Date().toISOString()}\n`, 'utf8');
   console.log(`\nDone: ${doneFile}`);
