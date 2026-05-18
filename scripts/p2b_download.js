@@ -56,6 +56,68 @@ function getDuration(filePath) {
   return null;
 }
 
+// ── 图片处理辅助函数 ─────────────────────────────────────
+
+function checkImageDims(filePath) {
+  try {
+    const result = execSync(
+      `python -c "from PIL import Image; img=Image.open(r'${filePath}'); print(img.size[0],img.size[1])"`,
+      { encoding: 'utf8', timeout: 10000, shell: true }
+    );
+    const parts = result.trim().split(/\s+/);
+    if (parts.length === 2) return { w: parseInt(parts[0]), h: parseInt(parts[1]) };
+  } catch (e) {}
+  return null;
+}
+
+async function scrapeMainImage(pageUrl) {
+  return new Promise((resolve, reject) => {
+    const proto = pageUrl.startsWith('https') ? https : http;
+    const req = proto.get(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      timeout: 15000,
+    }, (res) => {
+      if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+      let html = '';
+      res.on('data', chunk => { html += chunk.toString(); });
+      res.on('end', () => {
+        // 提取所有img src，优先og:image/meta, 然后较大的图片
+        const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+og:image/i);
+        if (ogMatch) { resolve(makeAbsolute(ogMatch[1], pageUrl)); return; }
+        
+        // 提取所有 img 标签
+        const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+        const imgUrls = [];
+        let m;
+        while ((m = imgRegex.exec(html)) !== null) {
+          const src = makeAbsolute(m[1], pageUrl);
+          // 跳过小图标和logo
+          if (!src.match(/(icon|logo|avatar|emoji|loading|header|footer|pixel|tracking|beacon)/i)
+              && src.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp)/i)) {
+            imgUrls.push(src);
+          }
+        }
+        if (imgUrls.length > 0) { resolve(imgUrls[0]); return; }
+        reject(new Error('No image found'));
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
+
+function makeAbsolute(imgUrl, pageUrl) {
+  if (imgUrl.startsWith('http')) return imgUrl;
+  if (imgUrl.startsWith('//')) return 'https:' + imgUrl;
+  const base = new URL(pageUrl);
+  if (imgUrl.startsWith('/')) return base.origin + imgUrl;
+  return base.origin + '/' + imgUrl;
+}
+
 // ── 下载函数 ────────────────────────────────────────────────
 
 function downloadFile(url, dest) {
@@ -133,37 +195,40 @@ function downloadWithYtDlp(url, outputTemplate) {
 
 // ── PIL 生成文字卡片（兜底，≤20%）────────────────────────
 
-function generatePilCard(sceneId, text, outputPath) {
+function generatePilCard(sceneId, text, outputPath, isVideo) {
   try {
-    // 调用 Python 生成文字卡片
-    const script = `
-from PIL import Image, ImageDraw, ImageFont
-import sys
-scene_id = ${sceneId}
-text = """${text.replace(/"/g, '\\"')}"""
-output = """${outputPath}"""
-img = Image.new('RGB', (1280, 720), color='#1a1a2e')
-draw = ImageDraw.Draw(img)
-try:
-    font = ImageFont.truetype('msyhbd.ttc', 60)
-except:
-    font = ImageFont.load_default()
-bbox = draw.textbbox((0, 0), text, font=font)
-tw = bbox[2] - bbox[0]
-th = bbox[3] - bbox[1]
-x = (1280 - tw) // 2
-y = (720 - th) // 2
-draw.text((x, y), text, font=font, fill='#FFFFFF')
-img.save(output)
-print('PIL_OK')
-`;
+    const isVid = isVideo === true;
+    // 统一先保存为 PNG
+    const pngPath = isVid ? outputPath.replace('.mp4', '.png') : outputPath;
+    const pyCode = [
+      'from PIL import Image,ImageDraw,ImageFont',
+      'img=Image.new("RGB",(1280,720),"#1a1a2e")',
+      'd=ImageDraw.Draw(img)',
+      'try: fnt=ImageFont.truetype("msyhbd.ttc",60)',
+      'except: fnt=ImageFont.load_default()',
+      't=' + JSON.stringify(text),
+      'bx=d.textbbox((0,0),t,font=fnt)',
+      'tw,th=bx[2]-bx[0],bx[3]-bx[1]',
+      'd.text(((1280-tw)//2,(720-th)//2),t,font=fnt,fill="white")',
+      'img.save(r"' + pngPath.replace(/\\/g, '\\\\') + '")',
+      'print("OK")',
+    ].join('\n');
     const tmpPy = outputPath + '.tmp.py';
-    fs.writeFileSync(tmpPy, script);
-    const result = execSync(`python "${tmpPy}"`, { encoding: 'utf8', timeout: 30000 });
+    fs.writeFileSync(tmpPy, pyCode);
+    execSync('python "' + tmpPy + '"', { encoding: 'utf8', timeout: 30000, shell: true });
     fs.unlinkSync(tmpPy);
-    return result.includes('PIL_OK') && fs.existsSync(outputPath);
+    if (!fs.existsSync(pngPath)) return false;
+    // 视频场景：FFmpeg 将 PNG 转 mp4（loop 5秒）
+    if (isVid) {
+      const ffmpeg = FFPROBE.replace('ffprobe.exe', 'ffmpeg.exe');
+      const cmd = '"' + ffmpeg + '" -y -loop 1 -i "' + pngPath + '" -c:v libx264 -t 5 -pix_fmt yuv420p "' + outputPath + '"';
+      execSync(cmd, { timeout: 60000, shell: true });
+      try { fs.unlinkSync(pngPath); } catch(e) {}
+      return fs.existsSync(outputPath) && fs.statSync(outputPath).size > 50000;
+    }
+    return true;
   } catch (e) {
-    console.log(`  ⚠️  PIL 生成失败: ${e.message}`);
+    console.log('  ⚠️  PIL 生成失败: ' + e.message.substring(0, 80));
     return false;
   }
 }
@@ -373,45 +438,61 @@ async function main() {
         : null;
       const urls = searchEntry ? (searchEntry.urls || []) : [];
       
-      // 尝试HTTP下载图片
+      // 尝试从页面HTML抓取图片 + 直接下载
       let downloaded = false;
       for (const url of urls) {
-        if (url.match(/\.(jpg|jpeg|png|webp)/i)) {
+        // 跳过已知的视频/音频URL
+        if (url.match(/\.(mp4|m4a|webm|mp3)/i)) continue;
+        
+        // 优先级1: 如果是直接图片URL，直接下载
+        if (url.match(/\.(jpg|jpeg|png|webp|gif)/i)) {
           console.log(`  尝试下载图片: ${url.substring(0, 60)}...`);
           try {
             fs.rmSync(finalPath, { force: true });
             await downloadFile(url, finalPath);
-            await new Promise(r => setTimeout(r, 1000));
-            
+            await new Promise(r => setTimeout(r, 2000));
             if (fs.existsSync(finalPath) && fs.statSync(finalPath).size > 10 * 1024) {
-              // 验证图片尺寸
-              try {
-                const { execSync } = require('child_process');
-                const result = execSync(
-                  `python -c "from PIL import Image; img=Image.open('${finalPath}'); print(img.size)"`,
-                  { encoding: 'utf8', timeout: 10000 }
-                );
-                const match = result.match(/\((\d+),\s*(\d+)\)/);
-                if (match) {
-                  const w = parseInt(match[1]), h = parseInt(match[2]);
-                  if (w > h && w >= 800) {
-                    console.log(`  ✅ 图片下载成功: ${path.basename(finalPath)} (${w}x${h})`);
-                    localPath = `assets/image/scene_${sceneId}.png`;
-                    sourceUrl = url;
-                    note = 'real download';
-                    verified = true;
-                    isReal = true;
-                    downloaded = true;
-                    break;
-                  }
-                }
-              } catch (e) {
-                console.log(`  ⚠️  图片验证失败: ${e.message}`);
+              const dims = checkImageDims(finalPath);
+              if (dims && dims.w > dims.h && dims.w >= 800) {
+                console.log(`  ✅ 直接下载成功: ${dims.w}x${dims.h}`);
+                localPath = `assets/image/scene_${sceneId}.png`;
+                sourceUrl = url;
+                note = 'real download';
+                verified = true;
+                isReal = true;
+                downloaded = true;
+                break;
               }
             }
-          } catch (e) {
-            console.log(`  ⚠️  图片下载失败: ${e.message}`);
-          }
+          } catch (e) { fs.rmSync(finalPath, { force: true }); }
+        }
+        
+        // 优先级2: 尝试从页面HTML提取主图
+        if (!downloaded) {
+          console.log(`  尝试抓取页面主图: ${url.substring(0, 60)}...`);
+          try {
+            const imgUrl = await scrapeMainImage(url);
+            if (imgUrl) {
+              console.log(`  发现图片: ${imgUrl.substring(0, 60)}...`);
+              fs.rmSync(finalPath, { force: true });
+              await downloadFile(imgUrl, finalPath);
+              await new Promise(r => setTimeout(r, 2000));
+              if (fs.existsSync(finalPath) && fs.statSync(finalPath).size > 10 * 1024) {
+                const dims = checkImageDims(finalPath);
+                if (dims && dims.w > dims.h && dims.w >= 800) {
+                  console.log(`  ✅ HTML抓取成功: ${dims.w}x${dims.h}`);
+                  localPath = `assets/image/scene_${sceneId}.png`;
+                  sourceUrl = url;
+                  note = 'real download (scraped)';
+                  verified = true;
+                  isReal = true;
+                  downloaded = true;
+                  break;
+                }
+              }
+              fs.rmSync(finalPath, { force: true });
+            }
+          } catch (e) { console.log(`  ⚠️  页面抓取失败: ${e.message.substring(0,60)}`); }
         }
       }
       

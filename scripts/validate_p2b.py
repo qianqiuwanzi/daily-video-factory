@@ -109,20 +109,40 @@ def validate_p2b(work_dir):
         if f.stat().st_size == 0:
             errors.append(f"门禁#1: 文件为空: {f.name}")
     
-    # 验证视频文件尺寸（width > height，横屏）
+    # 读取配置确定输出方向（竖屏输出允许竖屏源视频）
+    target_is_portrait = False
+    try:
+        _cfg_path = work_dir / "config.json"
+        if _cfg_path.exists():
+            with open(_cfg_path, 'r', encoding='utf-8') as _f:
+                _cfg = json.load(_f)
+            _res = _cfg.get("resolution", {})
+            target_is_portrait = _res.get("height", 1080) > _res.get("width", 1920)
+    except Exception:
+        target_is_portrait = False
+    
     for vf in video_files:
         dims = ffprobe_dimensions(vf)
         if dims is None:
-            warnings.append(f"门禁#2: 无法获取视频尺寸: {vf.name}")
+            warnings.append("门禁#2: 无法获取视频尺寸: %s" % vf.name)
         else:
             w, h = dims
-            if h > w:
+            if h > w and not target_is_portrait:
+                errors.append("门禁#2: 竖屏(%dx%d): %s" % (w, h, vf.name))
+            elif w < 480 and h < 480:
+                warnings.append("门禁#2: 尺寸偏低(%dx%d): %s" % (w, h, vf.name))
+            else:
+                print("  OK 尺寸合格: %s (%dx%d)" % (vf.name, w, h))
+
+            w, h = dims
+            # 竖屏输出(1080×1920)允许竖屏源视频；横屏输出需要横屏源视频
+            if h > w and not target_is_portrait:
                 errors.append(
-                    f"门禁#2: 视频是竖屏({w}×{h}): {vf.name} — 必须横屏(w>h)"
+                    f"门禁#2: 视频是竖屏({w}×{h}): {vf.name} — 横屏输出必须横屏素材(w>h)"
                 )
-            elif w < 1280 or h < 720:
+            elif w < 480 and h < 480:
                 warnings.append(
-                    f"门禁#2: 视频尺寸偏低({w}×{h}): {vf.name}，建议≥1280×720"
+                    f"门禁#2: 视频尺寸偏低({w}×{h}): {vf.name}，建议≥480×480"
                 )
             else:
                 print(f"  ✅ 视频尺寸合格: {vf.name} ({w}×{h})")
@@ -274,8 +294,9 @@ def validate_p2b(work_dir):
                     
                     # 真实视频通常>1MB且>10秒
                     if size_mb < 1.0 or (duration and duration < 10):
+                        dur_display = f"{duration:.0f}s" if duration else "?s"
                         suspicious_list.append(
-                            f"{scene_name}({size_mb:.1f}MB, {duration:.0f}s, {source[:40]})"
+                            f"{scene_name}({size_mb:.1f}MB, {dur_display}, {source[:40]})"
                         )
                     else:
                         real_by_source.append(f"{scene_name}({source[:40]})")
